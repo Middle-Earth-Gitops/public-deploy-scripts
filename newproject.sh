@@ -27,6 +27,12 @@ if [ ! -f .github/workflows/build.yaml ]; then
        curl https://raw.githubusercontent.com/Middle-Earth-Gitops/public-deploy-scripts/master/build.yaml --create-dirs -o .github/workflows/build.yaml
 fi
 
+#Pull down git pre-commit hook file
+if [ ! -f .git/hooks/pre-commit ]; then
+       curl https://raw.githubusercontent.com/OIT-Development-Team/public-deploy-scripts/refs/tags/stable/laravel-hooks/pre-commit --create-dirs -o .git/hooks/pre-commit
+	   chmod +x .git/hooks/pre-commit
+fi
+
 #Pull down docker-compose.yaml file
 if [ ! -f docker-compose.yaml ]; then
        curl https://raw.githubusercontent.com/Middle-Earth-Gitops/public-deploy-scripts/master/docker-compose.yaml --create-dirs -o docker-compose.yaml
@@ -45,11 +51,39 @@ if [ ! -d app ]; then
        fi
 fi
 
-if [ ! -d Dockerfile.dev ]; then
-       curl -X POST -d @deploy-plan.json --header "Content-Type: application/json" -H "AUTH: $AUTH" http://localhost:8080/api/docker/build-dev > Dockerfile.dev
-fi
+curl -X POST -d @deploy-plan.json --header "Content-Type: application/json" -H "AUTH: $AUTH" http://localhost:8080/api/docker/build-dev > Dockerfile.dev
 
 #Build and run container
 docker stop app
 docker rm app
-docker-compose up -d --build
+
+# Check for Windows by detecting 'OS' environment variable in Bash
+if [ "$OS" = "Windows_NT" ]; then
+    # Windows environment (Bash)
+	if command -v docker-compose >/dev/null 2>&1; then
+        docker-compose up -d --build
+    else
+        docker compose up -d --build
+    fi
+else
+    # Unix-like environment (Linux, macOS)
+    if command -v docker-compose >/dev/null 2>&1; then
+        docker-compose up -d --build
+    else
+        docker compose up -d --build
+    fi
+fi
+
+
+if $provision_app; then
+    echo "Creating New Laravel Application!"
+    docker exec -it app ./new-laravel-app.sh $FORWARD_ARGS
+    rm new-laravel-app.sh
+fi
+
+# run npm run dev in the bg if theres an app folder and package-lock.json (npm install has been ran)
+echo "Checking to see if we can npm run dev in background..."
+if [ -d app ]; then
+    echo "Running npm run dev in the background..."
+    docker exec -d app npm run dev
+fi

@@ -2,8 +2,14 @@
 
 # Set default values for boolean options
 livewire=false
+npm=false
 tailwind=true
 windows=false
+
+# Override $npm from deploy-plan.json if it exists
+if [ -f ./deploy-plan.json ]; then
+    npm=$(php -r "echo json_decode(file_get_contents('deploy-plan.json'), true)['build']['run_npm'] ?? 'false';")
+fi
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -249,29 +255,31 @@ EOL
 
     #-------------------------------------------------------------------------------------
 
-    # Update the vite.config.js file
-	echo -e "\nUpdating vite config..."
+	# Update the vite.config.js file
+    echo -e "\nUpdating vite config..."
     if $windows; then
         sed -i "/^export default defineConfig({/a\\
     server: {\n\
         host: '0.0.0.0',\n\
         hmr: {\n\
-            host: 'localhost',\n\
-        },\n\
-    }" vite.config.js
+            host: 'localhost'\n\
+        }\n\
+    },\
+		" vite.config.js
     else
         sed -i "/^export default defineConfig({/a\\
     server: {\n\
-        host: true,
-    }" vite.config.js
-	fi
+        host: true\n\
+    },\
+		" vite.config.js
+    fi
     echo "✅ Vite config updated."
 
     #-------------------------------------------------------------------------------------
 
     # Run npm install
 	if [ "$npm" = "true" ]; then
-	    echo -e "\nInstalling NPM packages..."
+	    echo -e "\n📦 Installing NPM packages..."
 	    npm install
 		echo "✅ NPM packages installed."
 	else
