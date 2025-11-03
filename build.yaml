@@ -2,30 +2,18 @@ name: Run Laravel Pint and Build PHP
 
 on:
   push:
-    branches: ["**"]
-    paths-ignore:
-      - '.github/**'
+  pull_request_target:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  run-pint:
-    uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/pint-fix.yml@master
+  build:
+    # TEST: uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@test
+    # STABLE: uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@main
+    uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@main
     with:
       repository: ${{ github.repository }}
-      branch: ${{ github.ref_name }}
-    secrets: inherit
-
-  build-php:
-    if: >
-      always() &&
-      needs.run-pint.result == 'success' &&
-      (github.ref_name == 'test' || github.ref_name == 'prod')
-    needs: run-pint
-    uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@master
-    with:
-      repository: ${{ github.repository }}
-      branch: ${{ github.ref_name }}
+      branch: ${{ github.base_ref || github.ref_name }}
     secrets: inherit

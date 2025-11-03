@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    platform: linux/amd64
     networks:
       - appnet
     volumes:
@@ -10,6 +11,7 @@ services:
       - ~/.ssh:/home/webuser/.ssh
     ports:
       - "8080:8080"
+      - "5173:5173"
     container_name: app
 networks:
   appnet:
