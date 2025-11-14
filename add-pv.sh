@@ -4,7 +4,7 @@ set -e
 
 echo
 # ------- selectable PVs ----------------------------------------------------
-pvs="actimages argos-nfs software-download-nfs software-engineering-download-nfs"
+pvs="veritas"
 
 
 echo "Select the persistent volumes to mount (comma-separated list):"

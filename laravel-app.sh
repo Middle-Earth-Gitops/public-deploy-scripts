@@ -231,12 +231,12 @@ function_configure_session() {
 function_configure_tailwind() {
 	if [ "$TAILWIND" = false ]; then
 		if grep -q '"tailwindcss"' package.json || [ -d node_modules/tailwindcss ]; then
-        	function_tailwind_remove
+        	function_remove_tailwind
 		fi
 	else
 	    if ! grep -q '"tailwindcss"' package.json && [ ! -d node_modules/tailwindcss ]; then
 	        # Tailwind is NOT installed, so install it manually
-	        function_tailwind_install
+	        function_install_tailwind
 	    fi
 	fi
 }
@@ -361,7 +361,423 @@ EOL
 	printf "${GREEN}✅ README.md created.${NC}\n"
 }
 
-function_tailwind_install() {
+function_setup_chromium_symlink() {
+    printf "${GRAY}   Setting up system Chromium symlink...${NC}\n"
+    SYSTEM_CHROMIUM="/usr/bin/chromium-browser"
+    
+    if [ ! -f "$SYSTEM_CHROMIUM" ]; then
+        printf "${YELLOW}⚠️  System Chromium not found at $SYSTEM_CHROMIUM. Install with: apk add chromium${NC}\n"
+        return 1
+    fi
+
+    # Find Playwright cache directory
+    PLAYWRIGHT_CACHE_DIR=""
+    if [ -d "$PWD/.cache/ms-playwright" ]; then
+        PLAYWRIGHT_CACHE_DIR="$PWD/.cache/ms-playwright"
+    elif [ -d "/var/www/html/.cache/ms-playwright" ]; then
+        PLAYWRIGHT_CACHE_DIR="/var/www/html/.cache/ms-playwright"
+    elif [ -d "$HOME/.cache/ms-playwright" ]; then
+        PLAYWRIGHT_CACHE_DIR="$HOME/.cache/ms-playwright"
+    fi
+
+    if [ -z "$PLAYWRIGHT_CACHE_DIR" ] || [ ! -d "$PLAYWRIGHT_CACHE_DIR" ]; then
+        printf "${YELLOW}⚠️  Playwright cache directory not found. Run 'npx playwright install chromium' first.${NC}\n"
+        return 1
+    fi
+
+    # Find Chromium version directory (auto-detect, gets the latest/most recent)
+    # Look for chromium_headless_shell directories and find chrome-linux subdirectory
+    CHROMIUM_BASE_DIR=$(find "$PLAYWRIGHT_CACHE_DIR" -type d -name "chromium_headless_shell-*" 2>/dev/null | head -1)
+    if [ -n "$CHROMIUM_BASE_DIR" ] && [ -d "$CHROMIUM_BASE_DIR/chrome-linux" ]; then
+        CHROMIUM_DIR="$CHROMIUM_BASE_DIR/chrome-linux"
+    else
+        CHROMIUM_DIR=""
+    fi
+
+    if [ -z "$CHROMIUM_DIR" ] || [ ! -d "$CHROMIUM_DIR" ]; then
+        printf "${YELLOW}⚠️  Playwright Chromium directory not found. Run 'npx playwright install chromium' first.${NC}\n"
+        return 1
+    fi
+
+    # Check if symlink already exists and is correct
+    if [ -L "$CHROMIUM_DIR/headless_shell" ]; then
+        CURRENT_TARGET=$(readlink -f "$CHROMIUM_DIR/headless_shell" 2>/dev/null || readlink "$CHROMIUM_DIR/headless_shell" 2>/dev/null)
+        if [ "$CURRENT_TARGET" = "$SYSTEM_CHROMIUM" ]; then
+            printf "${GREEN}✅ Symlink already exists and is correct: $CHROMIUM_DIR/headless_shell -> $SYSTEM_CHROMIUM${NC}\n"
+            return 0
+        else
+            printf "${GRAY}   Existing symlink points to different target, updating...${NC}\n"
+            rm "$CHROMIUM_DIR/headless_shell" 2>/dev/null || true
+        fi
+    fi
+
+    # Backup original if it exists and is not a symlink
+    if [ -f "$CHROMIUM_DIR/headless_shell" ] && [ ! -L "$CHROMIUM_DIR/headless_shell" ]; then
+        printf "${GRAY}   Backing up original headless_shell...${NC}\n"
+        mv "$CHROMIUM_DIR/headless_shell" "$CHROMIUM_DIR/headless_shell.backup" 2>/dev/null || true
+    fi
+
+    # Create symlink
+    if ln -sf "$SYSTEM_CHROMIUM" "$CHROMIUM_DIR/headless_shell" 2>/dev/null; then
+        printf "${GREEN}✅ Created symlink: $CHROMIUM_DIR/headless_shell -> $SYSTEM_CHROMIUM${NC}\n"
+        return 0
+    else
+        printf "${YELLOW}⚠️  Could not create symlink (may need to run manually)${NC}\n"
+        return 1
+    fi
+}
+
+function_install_browser_testing() {
+    echo ""
+    printf "${ORANGE}🧪 ${WHITE}Setting up browser testing with Pest v4...${NC}\n"
+
+    # Check if Pest browser plugin is installed
+    if grep -q 'pestphp/pest-plugin-browser' composer.json 2>/dev/null; then
+        pest_installed=true
+    else
+        pest_installed=false
+    fi
+
+    # Check if Playwright is installed in package.json
+    if grep -q 'playwright' package.json 2>/dev/null; then
+        playwright_installed=true
+    else
+        playwright_installed=false
+    fi
+
+    # Install Pest browser plugin if not present
+    if [ "$pest_installed" = false ]; then
+        printf "${GRAY}   Installing Pest browser plugin...${NC}\n"
+        composer require pestphp/pest-plugin-browser --dev --no-interaction
+        printf "${GREEN}✅ Pest browser plugin installed.${NC}\n"
+    else
+        printf "${GREEN}✅ Pest browser plugin already installed.${NC}\n"
+    fi
+
+    # Install Playwright if not present
+    if [ "$playwright_installed" = false ]; then
+        printf "${GRAY}   Installing Playwright...${NC}\n"
+        npm install playwright@latest
+        printf "${GREEN}✅ Playwright installed.${NC}\n"
+    else
+        printf "${GREEN}✅ Playwright already installed.${NC}\n"
+    fi
+
+    # Install Playwright browsers (only if not already installed)
+    # Check if Chromium is already installed by looking for the cache directory
+    PLAYWRIGHT_CACHE_CHECK=""
+    if [ -d "$PWD/.cache/ms-playwright" ]; then
+        PLAYWRIGHT_CACHE_CHECK="$PWD/.cache/ms-playwright"
+    elif [ -d "/var/www/html/.cache/ms-playwright" ]; then
+        PLAYWRIGHT_CACHE_CHECK="/var/www/html/.cache/ms-playwright"
+    elif [ -d "$HOME/.cache/ms-playwright" ]; then
+        PLAYWRIGHT_CACHE_CHECK="$HOME/.cache/ms-playwright"
+    fi
+
+    CHROMIUM_INSTALLED=false
+    if [ -n "$PLAYWRIGHT_CACHE_CHECK" ] && [ -d "$PLAYWRIGHT_CACHE_CHECK" ]; then
+        # Check if chromium_headless_shell directory exists
+        if find "$PLAYWRIGHT_CACHE_CHECK" -type d -name "chromium_headless_shell-*" 2>/dev/null | head -1 | grep -q .; then
+            CHROMIUM_INSTALLED=true
+        fi
+    fi
+
+    if [ "$CHROMIUM_INSTALLED" = false ]; then
+        printf "${GRAY}   Installing Playwright browsers...${NC}\n"
+        npx playwright install chromium 2>/dev/null || true
+        printf "${GREEN}✅ Playwright browsers installed.${NC}\n"
+    else
+        printf "${GREEN}✅ Playwright browsers already installed.${NC}\n"
+    fi
+
+    # Configure phpunit.xml to include Browser testsuite
+    if [ -f phpunit.xml ]; then
+        printf "${GRAY}   Configuring phpunit.xml...${NC}\n"
+        
+        # Check if Browser testsuite already exists
+        if ! grep -q '<testsuite name="Browser">' phpunit.xml; then
+            # Add Browser testsuite after Feature testsuite using awk
+            awk '
+            /<testsuite name="Feature">/,/<\/testsuite>/ {
+                print
+                if (/<\/testsuite>/) {
+                    print "        <testsuite name=\"Browser\">"
+                    print "            <directory>tests/Browser</directory>"
+                    print "        </testsuite>"
+                }
+                next
+            }
+            { print }
+            ' phpunit.xml > phpunit.xml.tmp && mv phpunit.xml.tmp phpunit.xml
+            
+            # Add Playwright environment variables to php section
+            if grep -q '<env name="NIGHTWATCH_ENABLED"' phpunit.xml; then
+                sed -i '/<env name="NIGHTWATCH_ENABLED"/a\
+        <env name="PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" value="1"/>\
+        <env name="PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH" value="/usr/bin/chromium-browser"/>' phpunit.xml
+            else
+                # If NIGHTWATCH_ENABLED doesn't exist, add before closing </php> tag
+                sed -i '/<\/php>/i\
+        <env name="PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" value="1"/>\
+        <env name="PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH" value="/usr/bin/chromium-browser"/>' phpunit.xml
+            fi
+            
+            printf "${GREEN}✅ Added Browser testsuite to phpunit.xml${NC}\n"
+        else
+            printf "${GREEN}✅ Browser testsuite already configured in phpunit.xml${NC}\n"
+        fi
+    fi
+
+    # Configure tests/Pest.php to include Browser directory
+    if [ -f tests/Pest.php ]; then
+        printf "${GRAY}   Configuring tests/Pest.php...${NC}\n"
+        
+        # Check if Browser directory is already configured
+        if ! grep -q "in('Browser')" tests/Pest.php; then
+            # Add Browser configuration after Feature configuration
+            sed -i "/->in('Feature');/a\\
+pest()->extend(Tests\\\\TestCase::class)\\
+    ->in('Browser');" tests/Pest.php
+            
+            printf "${GREEN}✅ Added Browser directory to tests/Pest.php${NC}\n"
+        else
+            printf "${GREEN}✅ Browser directory already configured in tests/Pest.php${NC}\n"
+        fi
+    fi
+
+    # Create tests/Browser directory and example test (only if it doesn't exist)
+    printf "${GRAY}   Creating browser test example...${NC}\n"
+    mkdir -p tests/Browser
+    if [ ! -f tests/Browser/ExampleTest.php ]; then
+        cat > tests/Browser/ExampleTest.php <<'EOL'
+<?php
+
+test('example', function () {
+    // Increase timeout for browser operations
+    \Pest\Browser\Playwright\Playwright::setTimeout(30_000); // 30 seconds
+    
+    $page = visit('/');
+    
+    $page->assertSee('Laravel');
+});
+EOL
+        printf "${GREEN}✅ Created example browser test at tests/Browser/ExampleTest.php${NC}\n"
+    else
+        printf "${GREEN}✅ Example browser test already exists at tests/Browser/ExampleTest.php${NC}\n"
+    fi
+
+    # Add screenshots directory to .gitignore if not present
+    if [ -f .gitignore ]; then
+        if ! grep -q "/tests/Browser/Screenshots" .gitignore; then
+            echo "/tests/Browser/Screenshots" >> .gitignore
+            printf "${GREEN}✅ Added /tests/Browser/Screenshots to .gitignore${NC}\n"
+        fi
+    fi
+
+    # Create symlink to system Chromium (critical for Alpine compatibility)
+    function_setup_chromium_symlink
+
+    # Create and apply Playwright timeout fix script
+    printf "${GRAY}   Creating Playwright timeout fix script...${NC}\n"
+    if [ ! -f fix-playwright-timeout.php ]; then
+        cat > fix-playwright-timeout.php <<'EOL'
+#!/usr/bin/env php
+<?php
+
+/**
+ * Fix Playwright server timeout issue in Pest browser plugin.
+ * This script increases the stop timeout from 0.1 to 5.0 seconds
+ * and adds a force-kill fallback to prevent hanging processes.
+ */
+
+$file = __DIR__ . '/vendor/pestphp/pest-plugin-browser/src/Playwright/Servers/PlaywrightNpmServer.php';
+
+if (!file_exists($file)) {
+    exit(0); // Silently skip if file doesn't exist
+}
+
+$content = file_get_contents($file);
+
+// Check if fix is already applied
+if (strpos($content, 'timeout: 5.0') !== false && strpos($content, '// Force kill if still running after timeout') !== false) {
+    exit(0); // Already fixed
+}
+
+// First, fix any broken replacements (like ".0," instead of "timeout: 5.0,")
+if (preg_match('/\s+\.0,\s+signal: PHP_OS_FAMILY/', $content)) {
+    // Restore broken file to original state
+    $content = preg_replace(
+        '/\s+\.0,\s+signal: PHP_OS_FAMILY === \'Windows\' \? null : SIGTERM,\s+\);/',
+        '            $this->systemProcess->stop(
+                timeout: 0.1,
+                signal: PHP_OS_FAMILY === \'Windows\' ? null : SIGTERM,
+            );',
+        $content
+    );
+    // Remove any broken force-kill code that was incorrectly added
+    $content = preg_replace('/\s+// Force kill if still running after timeout.*?\}\s*\}/s', '', $content);
+}
+
+// Now do the proper replacement using a simpler, more reliable approach
+// Find the exact pattern we need to replace
+$oldCode = '            $this->systemProcess->stop(
+                timeout: 0.1,
+                signal: PHP_OS_FAMILY === \'Windows\' ? null : SIGTERM,
+            );
+        }
+
+        $this->systemProcess = null;';
+
+$newCode = '            $this->systemProcess->stop(
+                timeout: 5.0,
+                signal: PHP_OS_FAMILY === \'Windows\' ? null : SIGTERM,
+            );
+            
+            // Force kill if still running after timeout
+            if ($this->isRunning()) {
+                $this->systemProcess->stop(
+                    timeout: 0.1,
+                    signal: PHP_OS_FAMILY === \'Windows\' ? null : SIGKILL,
+                );
+            }
+        }
+
+        $this->systemProcess = null;';
+
+if (strpos($content, $oldCode) !== false) {
+    $content = str_replace($oldCode, $newCode, $content);
+} else {
+    // Fallback: try with flexible whitespace matching
+    $content = preg_replace(
+        '/\$this->systemProcess->stop\(\s+timeout: 0\.1,/',
+        '$this->systemProcess->stop(
+                timeout: 5.0,',
+        $content
+    );
+    
+    // Add force-kill after the stop() call
+    $content = preg_replace(
+        '/(\$this->systemProcess->stop\(\s+timeout: 5\.0,\s+signal: PHP_OS_FAMILY === \'Windows\' \? null : SIGTERM,\s+\);\s+)(\}\s+\$this->systemProcess = null;)/s',
+        '$1            
+            // Force kill if still running after timeout
+            if ($this->isRunning()) {
+                $this->systemProcess->stop(
+                    timeout: 0.1,
+                    signal: PHP_OS_FAMILY === \'Windows\' ? null : SIGKILL,
+                );
+            }
+        }
+
+        $2',
+        $content
+    );
+}
+
+file_put_contents($file, $content);
+EOL
+        chmod +x fix-playwright-timeout.php
+        printf "${GREEN}✅ Created fix-playwright-timeout.php${NC}\n"
+    else
+        printf "${GREEN}✅ fix-playwright-timeout.php already exists${NC}\n"
+    fi
+
+    # Apply the timeout fix immediately
+    printf "${GRAY}   Applying Playwright timeout fix...${NC}\n"
+    php fix-playwright-timeout.php 2>/dev/null && {
+        printf "${GREEN}✅ Applied Playwright timeout fix${NC}\n"
+    } || {
+        printf "${GRAY}   (Fix will be applied after composer install)${NC}\n"
+    }
+
+    # Add post-update-cmd to composer.json to automatically recreate symlink and apply timeout fix after composer update
+    if [ -f composer.json ]; then
+        printf "${GRAY}   Configuring composer.json post-update-cmd...${NC}\n"
+        
+        # Check if post-update-cmd already exists
+        if grep -q '"post-update-cmd"' composer.json; then
+            # Check if our fixes are already in the post-update-cmd
+            has_symlink_fix=false
+            has_timeout_fix=false
+            if grep -q 'function_setup_chromium_symlink' composer.json; then
+                has_symlink_fix=true
+            fi
+            if grep -q 'fix-playwright-timeout.php' composer.json; then
+                has_timeout_fix=true
+            fi
+
+            if [ "$has_symlink_fix" = true ] && [ "$has_timeout_fix" = true ]; then
+                printf "${GREEN}✅ post-update-cmd already configured for browser testing${NC}\n"
+            else
+                # Add our commands to existing post-update-cmd array
+                # Use PHP to safely modify JSON
+                php -r "
+                \$json = json_decode(file_get_contents('composer.json'), true);
+                if (!isset(\$json['scripts']['post-update-cmd'])) {
+                    \$json['scripts']['post-update-cmd'] = [];
+                }
+                if (!is_array(\$json['scripts']['post-update-cmd'])) {
+                    \$json['scripts']['post-update-cmd'] = [\$json['scripts']['post-update-cmd']];
+                }
+                
+                \$symlink_cmd = 'bash -c \"if [ -f laravel-app.sh ]; then source laravel-app.sh && function_setup_chromium_symlink; fi\"';
+                \$timeout_cmd = '@php fix-playwright-timeout.php';
+                
+                if (!in_array(\$symlink_cmd, \$json['scripts']['post-update-cmd'])) {
+                    \$json['scripts']['post-update-cmd'][] = \$symlink_cmd;
+                }
+                if (!in_array(\$timeout_cmd, \$json['scripts']['post-update-cmd'])) {
+                    \$json['scripts']['post-update-cmd'][] = \$timeout_cmd;
+                }
+                
+                file_put_contents('composer.json', json_encode(\$json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL);
+                echo 'Updated post-update-cmd';
+                " 2>/dev/null && {
+                    printf "${GREEN}✅ Added browser testing fixes to existing post-update-cmd${NC}\n"
+                } || {
+                    printf "${YELLOW}⚠️  Could not automatically add to post-update-cmd (may need manual configuration)${NC}\n"
+                }
+            fi
+        else
+            # Add new post-update-cmd section
+            php -r "
+            \$json = json_decode(file_get_contents('composer.json'), true);
+            if (!isset(\$json['scripts'])) {
+                \$json['scripts'] = [];
+            }
+            \$json['scripts']['post-update-cmd'] = [
+                '@php artisan config:clear --ansi',
+                'bash -c \"if [ -f laravel-app.sh ]; then source laravel-app.sh && function_setup_chromium_symlink; fi\"',
+                '@php fix-playwright-timeout.php'
+            ];
+            file_put_contents('composer.json', json_encode(\$json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL);
+            " 2>/dev/null && {
+                printf "${GREEN}✅ Added post-update-cmd to composer.json${NC}\n"
+            } || {
+                printf "${YELLOW}⚠️  Could not automatically add post-update-cmd (may need manual configuration)${NC}\n"
+            }
+        fi
+    fi
+
+    printf "\n${GREEN}✅ Browser testing setup complete!${NC}\n"
+    printf "${GRAY}   Run tests with: ${WHITE}php artisan test${NC}\n"
+    printf "${GRAY}   Or browser tests only: ${WHITE}php artisan test --testsuite=Browser${NC}\n"
+    printf "${GRAY}   Symlink and timeout fix will be automatically reapplied after 'composer update'${NC}\n"
+}
+
+function_install_composer() {
+    printf "${ORANGE}📦 ${WHITE}Running composer install...${NC}\n"
+    composer install --no-interaction --prefer-dist || true
+    printf "${GREEN}✅ Composer dependencies installed.${NC}\n"
+}
+
+function_install_npm() {
+    printf "${ORANGE}📦 ${WHITE}Running npm install...${NC}\n"
+    npm install || true
+    npm audit fix || true
+    printf "${GREEN}✅ NPM dependencies installed.${NC}\n"
+}
+
+function_install_tailwind() {
     printf "${GRAY}✨ ${WHITE}Installing Tailwind CSS and configs...${NC}\n"
 
     # Install Tailwind-related packages and update node_modules
@@ -420,35 +836,24 @@ EOF
     fi
 
     # Add Tailwind plugin to vite.config.js if missing
-    if [ -f "$FILE_VITE" ]; then
-        if ! grep -q 'tailwindcss' "$FILE_VITE"; then
-            # Insert import at the top after other imports
-            sed -i '1i import tailwindcss from "@tailwindcss/vite";' "$FILE_VITE"
+    for FILE_VITE in "$FILE_VITE_BASE.js" "$FILE_VITE_BASE.ts"; do
+        if [ -f "$FILE_VITE" ]; then
+            if ! grep -q 'tailwindcss' "$FILE_VITE"; then
+                # Insert import at the top after other imports
+                sed -i '1i import tailwindcss from "@tailwindcss/vite";' "$FILE_VITE"
 
-            # Add tailwindcss() to plugins array (naive approach)
-            sed -i '/plugins: \[/a \        tailwindcss(),' "$FILE_VITE"
+                # Add tailwindcss() to plugins array (naive approach)
+                sed -i '/plugins: \[/a \        tailwindcss(),' "$FILE_VITE"
 
-            printf "Added Tailwind plugin to '$FILE_VITE'\n"
+                printf "Added Tailwind plugin to '$FILE_VITE'\n"
+            fi
         fi
-    fi
+    done
 
     printf "${GREEN}✅ ${WHITE}Tailwind installed and configured!${NC}\n"
 }
 
-function_install_composer() {
-    printf "${ORANGE}📦 ${WHITE}Running composer install...${NC}\n"
-    composer install --no-interaction --prefer-dist || true
-    printf "${GREEN}✅ Composer dependencies installed.${NC}\n"
-}
-
-function_install_npm() {
-    printf "${ORANGE}📦 ${WHITE}Running npm install...${NC}\n"
-    npm install || true
-    npm audit fix || true
-    printf "${GREEN}✅ NPM dependencies installed.${NC}\n"
-}
-
-function_tailwind_remove() {
+function_remove_tailwind() {
     printf "${GRAY}🗑️  ${WHITE}Removing Tailwind CSS files and config...${NC}\n"
 
     # Extract all @tailwindcss packages from package.json in a portable way (no -P)
@@ -483,12 +888,14 @@ function_tailwind_remove() {
     fi
 
     # Clean Tailwind plugin lines from vite.config.js if present
-    if [ -f "$FILE_VITE" ]; then
-        if grep -q 'tailwindcss' "$FILE_VITE"; then
-            sed -i '/import.*tailwindcss.*/d' "$FILE_VITE"
-            sed -i '/tailwindcss(),/d' "$FILE_VITE"
+    for FILE_VITE in "$FILE_VITE_BASE.js" "$FILE_VITE_BASE.ts"; do
+        if [ -f "$FILE_VITE" ]; then
+            if grep -q 'tailwindcss' "$FILE_VITE"; then
+                sed -i '/import.*tailwindcss.*/d' "$FILE_VITE"
+                sed -i '/tailwindcss(),/d' "$FILE_VITE"
+            fi
         fi
-    fi
+    done
 
     # Remove any leftover Tailwind node_modules folders
     rm -rf node_modules/tailwindcss node_modules/@tailwindcss
@@ -498,6 +905,23 @@ function_tailwind_remove() {
     npm install
 
     printf "${GREEN}✅ ${WHITE}Tailwind removed and dependencies updated.${NC}\n"
+}
+
+function_ua_template() {
+	if [ "$UA_TEMPLATE" = true ]; then
+    	echo ""
+    	printf "${ORANGE}📦 ${WHITE}Downloading UA templates...${NC}\n"
+    	wget --no-check-certificate -nc -P app/View/Components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/Components/NavLinks.php && \
+    	wget --no-check-certificate -nc -P resources/views/components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/component-views/nav-links.blade.php && \
+    	wget --no-check-certificate -nc -P app/View/Components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/Components/VerticalLayout.php && \
+    	wget --no-check-certificate -nc -P resources/views/components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/component-views/vertical-layout.blade.php && \
+    	wget --no-check-certificate -nc -P app/View/Components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/Components/Dropdown.php && \
+    	wget --no-check-certificate -nc -P resources/views/components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/component-views/dropdown.blade.php
+    	wget --no-check-certificate -nc -P app/View/Components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/Components/ThemeSelector.php && \
+    	wget --no-check-certificate -nc -P resources/views/components https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/component-views/theme-selector.blade.php
+    	wget --no-check-certificate -nc -P public/img https://raw.githubusercontent.com/OIT-Development-Team/ui-components-public/refs/heads/main/img/nameplate.png
+		printf "${GREEN}✅ UA templates added.${NC}\n"
+	fi
 }
 
 # --------------------------------------
@@ -510,25 +934,27 @@ if [ ! -d app ]; then
     composer require laravel/installer
     vendor/bin/laravel new --database=sqlite --npm "$TEMP_DIR"
 
-	printf "${ORANGE}📦 ${WHITE}Moving project files...${NC}\n"
-	# This method of moving the application should avoid any file limit issues
-	rm -rf vendor composer*
+    printf "${ORANGE}📦 ${WHITE}Moving project files...${NC}\n"
+    # This method of moving the application should avoid any file limit issues
+    rm -rf vendor composer*
     mv "$TEMP_DIR"/vendor ./
-	rm -rf "$TEMP_DIR"/.git*
+    rm -rf "$TEMP_DIR"/.git*
     find "$TEMP_DIR" -mindepth 1 -maxdepth 1 -exec mv -t . {} +
     rm -rf "$TEMP_DIR"
-	printf "\n${GREEN}✅ Project moved!${NC}\n"
+    printf "\n${GREEN}✅ Project moved!${NC}\n"
 
-	npm audit fix
-	function_configure_caching
-	function_configure_database
-	function_configure_logging
-	function_configure_proxies
-	function_configure_session
-	function_configure_tailwind
-	function_configure_vite
+    npm audit fix
+    function_configure_caching
+    function_configure_database
+    function_configure_logging
+    function_configure_proxies
+    function_configure_session
+    function_configure_tailwind
+    function_configure_vite
     function_create_readme
+    function_ua_template
     function_configure_gitignore
+    function_install_browser_testing
 
     echo ""
     printf "\n${GREEN}✅ Laravel scaffolding complete.${NC}\n"
@@ -538,6 +964,7 @@ else
     function_configure_database
     function_configure_vite
     function_configure_gitignore
+    function_install_browser_testing
 
     printf "\n${GREEN}✅ Laravel application already exists.${NC}\n"
 fi

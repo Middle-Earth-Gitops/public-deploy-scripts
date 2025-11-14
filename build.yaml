@@ -11,8 +11,8 @@ permissions:
 jobs:
   build:
     # TEST: uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@test
-    # STABLE: uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@main
-    uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@main
+    # STABLE: uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@master
+    uses: Middle-Earth-Gitops/build-laravel-app-image/.github/workflows/build-deploy-app.yml@master
     with:
       repository: ${{ github.repository }}
       branch: ${{ github.base_ref || github.ref_name }}

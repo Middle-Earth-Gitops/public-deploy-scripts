@@ -5,8 +5,8 @@
 		"npm_run_command": "npm run build"
 	},
 	"image": {
-		"name": "middleearthmedia/php-alpine",
-		"tag": "8.4",
+		"name": "php-alpine",
+		"tag": "8.4-slim-latest",
 		"databases": [],
 		"os_modules": [],
 		"php_extensions": [],
